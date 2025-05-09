@@ -1,68 +1,81 @@
 package com.kyn.totp;
 
+import java.nio.ByteBuffer;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
-import java.util.concurrent.TimeUnit;
+import java.time.Instant;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 import org.apache.commons.codec.binary.Base32;
 
+/**
+ * Utility class for generating and verifying TOTP (Time-based One-Time Password) codes.
+ * This class provides methods for generating secret keys and TOTP codes,
+ * as well as verifying TOTP codes.
+ *
+ * @author Kyn
+ * @version 1.0
+ */
 public class TOTPGenerator {
+    private static final int DIGITS = 6;
+    private static final int TIME_STEP = 30;
 
-  private static final String HMAC_ALGO = "HmacSHA1";
-  private static final int TIME_STEP_SECONDS = 30;
-  
-
-  public static String generateSecretKey() {
-    Base32 base32 = new Base32();
-    byte[] bytes = new byte[20];
-    new java.security.SecureRandom().nextBytes(bytes);
-    return base32.encodeToString(bytes);
-  }
-
-  public static String getTOTPCode(String secretKey) {
-    long timeIndex =
-        TimeUnit.MILLISECONDS.toSeconds(System.currentTimeMillis()) / TIME_STEP_SECONDS;
-    return generateTOTP(secretKey, timeIndex);
-  }
-
-  public static boolean verifyTOTPCode(String secretKey, String code) {
-    long timeIndex =
-        TimeUnit.MILLISECONDS.toSeconds(System.currentTimeMillis()) / TIME_STEP_SECONDS;
-    String generatedCode = generateTOTP(secretKey, timeIndex);
-    return generatedCode.equals(code);
-  }
-
-  private static String generateTOTP(String secretKey, long timeIndex) {
-    Base32 base32 = new Base32();
-    byte[] key = base32.decode(secretKey);
-    byte[] data = new byte[8];
-    long value = timeIndex;
-    for (int i = 7; value > 0; i--) {
-      data[i] = (byte) (value & 0xFF);
-      value >>= 8;
+    /**
+     * Private constructor to prevent instantiation.
+     */
+    private TOTPGenerator() {
+        // Utility class
     }
 
-    try {
-      SecretKeySpec signKey = new SecretKeySpec(key, HMAC_ALGO);
-      Mac mac = Mac.getInstance(HMAC_ALGO);
-      mac.init(signKey);
-      byte[] hash = mac.doFinal(data);
-
-      int offset = hash[hash.length - 1] & 0xF;
-      long truncatedHash = 0;
-      for (int i = 0; i < 4; ++i) {
-        truncatedHash <<= 8;
-        truncatedHash |= (hash[offset + i] & 0xFF);
-      }
-      truncatedHash &= 0x7FFFFFFF;
-      truncatedHash %= 1000000;
-
-      return String.format("%06d", truncatedHash);
-    } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-      throw new RuntimeException("Error generating TOTP", e);
+    /**
+     * Generates a random secret key for TOTP generation.
+     * @return A Base32 encoded secret key
+     */
+    public static String generateSecretKey() {
+        byte[] key = new byte[20];
+        new java.security.SecureRandom().nextBytes(key);
+        return new Base32().encodeToString(key);
     }
-  }
+
+    /**
+     * Generates a TOTP code using the provided secret key.
+     * @param secretKey The Base32 encoded secret key
+     * @return A 6-digit TOTP code
+     */
+    public static String getTOTPCode(String secretKey) {
+        try {
+            byte[] key = new Base32().decode(secretKey);
+            long timeStep = Instant.now().getEpochSecond() / TIME_STEP;
+            byte[] timeStepBytes = ByteBuffer.allocate(8).putLong(timeStep).array();
+
+            Mac mac = Mac.getInstance("HmacSHA1");
+            SecretKeySpec secretKeySpec = new SecretKeySpec(key, "HmacSHA1");
+            mac.init(secretKeySpec);
+            byte[] hash = mac.doFinal(timeStepBytes);
+
+            int offset = hash[hash.length - 1] & 0xf;
+            int binary = ((hash[offset] & 0x7f) << 24) |
+                    ((hash[offset + 1] & 0xff) << 16) |
+                    ((hash[offset + 2] & 0xff) << 8) |
+                    (hash[offset + 3] & 0xff);
+
+            int otp = binary % (int) Math.pow(10, DIGITS);
+            return String.format("%0" + DIGITS + "d", otp);
+        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
+            throw new RuntimeException("Error generating TOTP code", e);
+        }
+    }
+
+    /**
+     * Verifies if the provided TOTP code is valid for the given secret key.
+     * @param secretKey The Base32 encoded secret key
+     * @param code The TOTP code to verify
+     * @return true if the code is valid, false otherwise
+     */
+    public static boolean verifyTOTPCode(String secretKey, String code) {
+        String currentCode = getTOTPCode(secretKey);
+        return currentCode.equals(code);
+    }
 }
